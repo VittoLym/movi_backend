@@ -7,6 +7,7 @@ const {
   getMovieById,
   listMovies,
   createMovie,
+  getSimilarMovies,
 } = require('../controllers/movies.controller');
 
 const {
@@ -20,7 +21,7 @@ const router = express.Router();
 router.get('/random', softAuth, getRandomMovie);
 router.get('/', listMovies);
 router.get('/:id', getMovieById);
-
+router.get('/:id/similar', getSimilarMovies);
 // Carga de catálogo (hoy sin rol admin; ver README para el TODO)
 router.post('/', createMovie);
 

@@ -1,34 +1,81 @@
 const pool = require('../config/db');
+const { getMovieDetails } = require('../services/tmdb.service');
 
 // Trae géneros, plataformas y rating agregado de una película ya seleccionada
 async function hydrateMovie(movie) {
-  const [genres, providers, ratingAgg] = await Promise.all([
+  const [genres, providers, ratingAgg, tmdbData] = await Promise.all([
     pool.query(
-      `SELECT g.name FROM movie_genres mg
+      `SELECT g.name
+       FROM movie_genres mg
        JOIN genres g ON g.id = mg.genre_id
        WHERE mg.movie_id = $1`,
       [movie.id]
     ),
     pool.query(
-      `SELECT sp.name, sp.icon_label AS icon, sp.color_hex AS color
+      `SELECT sp.name,
+              sp.icon_label AS icon,
+              sp.color_hex AS color,
+              sp.logo_url
        FROM movie_providers mp
        JOIN streaming_providers sp ON sp.id = mp.provider_id
        WHERE mp.movie_id = $1`,
       [movie.id]
     ),
     pool.query(
-      `SELECT COALESCE(AVG(rating), 0)::float AS avg_rating, COUNT(*)::int AS review_count
-       FROM reviews WHERE movie_id = $1`,
+      `SELECT
+          COALESCE(AVG(rating), 0)::float AS avg_rating,
+          COUNT(*)::int AS review_count
+       FROM reviews
+       WHERE movie_id = $1`,
       [movie.id]
     ),
+    movie.tmdb_id
+      ? getMovieDetails(movie.tmdb_id)
+      : Promise.resolve(null),
   ]);
-
+  console.log(tmdbData);
+  console.log('Monotributo')
+  console.log(movie)
   return {
     ...movie,
-    genres: genres.rows.map((g) => g.name),
-    providers: providers.rows,
-    avgRating: Math.round(ratingAgg.rows[0].avg_rating * 10) / 10,
-    reviewCount: ratingAgg.rows[0].review_count,
+
+    genres: genres.rows.map(g => g.name),
+
+    providers:
+      providers.rows.length > 0
+        ? providers.rows
+        : (tmdbData?.watchProviders ?? []),
+
+    avgRating:
+      Math.round(
+        Number(ratingAgg.rows[0].avg_rating) * 10
+      ) / 10,
+
+    reviewCount:
+      Number(ratingAgg.rows[0].review_count),
+
+    // imágenes
+    poster_url:
+      tmdbData?.poster_url || movie.poster_url,
+
+    backdrop_url:
+      tmdbData?.backdrop_url || movie.backdrop_url,
+
+    // metadata
+    duration_min:
+      tmdbData?.runtime || movie.duration_min,
+
+    director:
+      tmdbData?.director || null,
+
+    cast:
+      tmdbData?.cast || [],
+
+    trailerUrl:
+      tmdbData?.trailerUrl || null,
+
+    similarMovies:
+      tmdbData?.similarMovies || [],
   };
 }
 
@@ -36,6 +83,26 @@ async function hydrateMovie(movie) {
 // Si hay usuario logueado (softAuth), intenta priorizar películas que matcheen
 // sus géneros o plataformas activas. Si no matchea nada (o es anónimo), cae a
 // random puro sobre toda la tabla.
+async function getUserActivePreferenceNames(userId) {
+  const [genreRows, providerRows] = await Promise.all([
+    pool.query(
+      `SELECT g.name FROM user_genres ug
+       JOIN genres g ON g.id = ug.genre_id
+       WHERE ug.user_id = $1 AND ug.active = true`,
+      [userId]
+    ),
+    pool.query(
+      `SELECT sp.name FROM user_streaming_services uss
+       JOIN streaming_providers sp ON sp.id = uss.provider_id
+       WHERE uss.user_id = $1 AND uss.active = true`,
+      [userId]
+    ),
+  ]);
+  return {
+    genres: genreRows.rows.map((r) => r.name),
+    providers: providerRows.rows.map((r) => r.name),
+  };
+}
 async function getRandomMovie(req, res, next) {
   try {
     let movie = null;
@@ -43,39 +110,123 @@ async function getRandomMovie(req, res, next) {
     if (req.userId) {
       const { rows } = await pool.query(
         `WITH active_genres AS (
-          SELECT genre_id FROM user_genres WHERE user_id = $1 AND active = true
-        ), active_providers AS (
-          SELECT provider_id FROM user_streaming_services WHERE user_id = $1 AND active = true
-        ), matching_ids AS (
+          SELECT genre_id
+          FROM user_genres
+          WHERE user_id = $1
+          AND active = true
+        ),
+        active_providers AS (
+          SELECT provider_id
+          FROM user_streaming_services
+          WHERE user_id = $1
+          AND active = true
+        ),
+        matching_ids AS (
           SELECT DISTINCT m.id
           FROM movies m
           LEFT JOIN movie_genres mg ON mg.movie_id = m.id
           LEFT JOIN movie_providers mp ON mp.movie_id = m.id
           WHERE mg.genre_id IN (SELECT genre_id FROM active_genres)
-              OR mp.provider_id IN (SELECT provider_id FROM active_providers)
+             OR mp.provider_id IN (SELECT provider_id FROM active_providers)
         )
         SELECT m.*
         FROM movies m
-        JOIN matching_ids ON matching_ids.id = m.id
+        JOIN matching_ids mi ON mi.id = m.id
         ORDER BY random()
         LIMIT 1`,
         [req.userId]
       );
-      movie = rows[0] || null;
-    }
 
-    // Fallback: anónimo, o el usuario no tiene preferencias que matcheen nada
-    if (!movie) {
-      const { rows } = await pool.query('SELECT * FROM movies ORDER BY random() LIMIT 1');
       movie = rows[0] || null;
     }
 
     if (!movie) {
-      return res.status(404).json({ error: 'No hay películas cargadas todavía.' });
+      const { rows } = await pool.query(`
+        SELECT *
+        FROM movies
+        ORDER BY random()
+        LIMIT 1
+      `);
+
+      movie = rows[0] || null;
+    }
+
+    if (!movie) {
+      return res.status(404).json({
+        error: 'No hay películas cargadas todavía.',
+      });
     }
 
     const hydrated = await hydrateMovie(movie);
-    res.json({ ...hydrated, personalized: Boolean(req.userId) });
+
+    let matchReasons = null;
+    let matchPercent = null;
+
+    if (req.userId) {
+      const prefs = await getUserActivePreferenceNames(req.userId);
+
+      const matchedGenres = hydrated.genres.filter(
+        (g) => prefs.genres.includes(g)
+      );
+
+      const matchedProviders = hydrated.providers
+        .map((p) => p.name)
+        .filter((p) => prefs.providers.includes(p));
+
+      matchReasons = {
+        genres: matchedGenres,
+        providers: matchedProviders,
+      };
+
+      const genreScore =
+        matchedGenres.length > 0
+          ? Math.min(70, matchedGenres.length * 20)
+          : 0;
+
+      const providerScore =
+        matchedProviders.length > 0
+          ? Math.min(30, matchedProviders.length * 15)
+          : 0;
+
+      matchPercent = Math.min(
+        100,
+        genreScore + providerScore
+      );
+    }
+
+    return res.json({
+      id: hydrated.id,
+
+      title: hydrated.title,
+      overview: hydrated.overview,
+
+      release_year: hydrated.release_year,
+      duration_min: hydrated.duration_min,
+
+      avgRating: hydrated.avgRating,
+      reviewCount: hydrated.reviewCount,
+
+      poster_url: hydrated.poster_url,
+      backdrop_url: hydrated.backdrop_url,
+
+      genres: hydrated.genres,
+
+      providers: hydrated.providers,
+
+      trailerUrl: hydrated.trailerUrl,
+
+      director: hydrated.director,
+
+      cast: hydrated.cast,
+
+      similarMovies: hydrated.similarMovies,
+
+      personalized: Boolean(req.userId),
+
+      matchPercent,
+
+      matchReasons,
+    });
   } catch (err) {
     next(err);
   }
@@ -157,5 +308,27 @@ async function createMovie(req, res, next) {
     next(err);
   }
 }
+async function getSimilarMovies(req, res, next) {
+  try {
+    const { id } = req.params;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 3, 10);
 
-module.exports = { getRandomMovie, getMovieById, listMovies, createMovie };
+    const { rows } = await pool.query(
+      `SELECT m.*, COUNT(mg2.genre_id)::int AS shared_genres
+       FROM movies m
+       JOIN movie_genres mg2 ON mg2.movie_id = m.id
+       WHERE mg2.genre_id IN (SELECT genre_id FROM movie_genres WHERE movie_id = $1)
+         AND m.id != $1
+       GROUP BY m.id
+       ORDER BY shared_genres DESC, random()
+       LIMIT $2`,
+      [id, limit]
+    );
+
+    const hydrated = await Promise.all(rows.map(hydrateMovie));
+    res.json(hydrated);
+  } catch (err) {
+    next(err);
+  }
+}
+module.exports = { getRandomMovie, getMovieById, listMovies, createMovie, getSimilarMovies };
