@@ -1,4 +1,7 @@
 const pool = require('../config/db');
+const fs = require('fs');
+const path = require('path');
+
 
 // GET /api/users/me
 async function getMe(req, res, next) {
@@ -45,4 +48,35 @@ async function updateMe(req, res, next) {
   }
 }
 
-module.exports = { getMe, updateMe };
+async function uploadMyAvatar(req, res, next) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No se recibió ningún archivo.' });
+    }
+
+    const publicUrl = `/uploads/avatars/${req.file.filename}`;
+
+    // Traer el avatar viejo para borrarlo si era un upload local (no un default)
+    const { rows: prevRows } = await pool.query(
+      'SELECT avatar_url FROM users WHERE id = $1', [req.userId]
+    );
+    const prevAvatar = prevRows[0]?.avatar_url;
+
+    const { rows } = await pool.query(
+      `UPDATE users SET avatar_url = $1, updated_at = now()
+       WHERE id = $2 RETURNING avatar_url AS avatar`,
+      [publicUrl, req.userId]
+    );
+
+    // Limpieza: si el avatar anterior era un upload nuestro, lo borramos
+    if (prevAvatar && prevAvatar.startsWith('/uploads/avatars/')) {
+      const oldPath = path.join(__dirname, '..', '..', prevAvatar);
+      fs.unlink(oldPath, () => {}); // best-effort, no bloquea la respuesta
+    }
+
+    res.json(rows[0]);
+  } catch (err) {
+    next(err);
+  }
+}
+module.exports = { getMe, updateMe, uploadMyAvatar };

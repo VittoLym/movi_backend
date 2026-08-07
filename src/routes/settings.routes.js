@@ -1,7 +1,8 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth.middleware');
 
-const { getMe, updateMe } = require('../controllers/users.controller');
+const { getMe, updateMe, uploadMyAvatar } = require('../controllers/users.controller');
+const { uploadAvatar } = require('../middleware/upload.middleware')
 const { listMyGenres, setGenreActive } = require('../controllers/preferences.controller');
 const {
   listMyStreamingServices,
@@ -19,6 +20,7 @@ router.use(requireAuth);
 // Perfil -> userData
 router.get('/users/me', getMe);
 router.patch('/users/me', updateMe);
+router.post('/users/me/avatar', uploadAvatar.single('avatar'), uploadMyAvatar);
 
 // Géneros -> genres[]
 router.get('/users/me/genres', listMyGenres);
