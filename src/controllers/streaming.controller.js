@@ -8,6 +8,7 @@ async function listMyStreamingServices(req, res, next) {
       `SELECT sp.name,
               sp.icon_label AS icon,
               sp.color_hex  AS color,
+              sp.logo_url   AS logo,
               COALESCE(uss.active, false) AS active,
               uss.connected_at,
               uss.last_synced_at

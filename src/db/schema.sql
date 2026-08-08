@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
   name            VARCHAR(120) NOT NULL,
   email           VARCHAR(180) NOT NULL UNIQUE,
   password_hash   TEXT NOT NULL,
-  avatar_url      TEXT DEFAULT 'img/avatar.jpg',
+  avatar_url      TEXT DEFAULT '/img/avatar.jpg',
   level_label     VARCHAR(80) DEFAULT 'Cinéfilo Nivel 1',   -- "Cinéfilo Nivel 23"
   member_since    DATE NOT NULL DEFAULT CURRENT_DATE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),

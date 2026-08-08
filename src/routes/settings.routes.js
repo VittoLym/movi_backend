@@ -1,9 +1,19 @@
 const express = require('express');
 const { requireAuth } = require('../middleware/auth.middleware');
 
-const { getMe, updateMe, uploadMyAvatar } = require('../controllers/users.controller');
+const { 
+  getMe,
+  updateMe,
+  uploadMyAvatar,
+  changeEmail,
+  changePassword,
+  deleteAccount
+ } = require('../controllers/users.controller');
 const { uploadAvatar } = require('../middleware/upload.middleware')
-const { listMyGenres, setGenreActive } = require('../controllers/preferences.controller');
+const { 
+  listMyGenres,
+  setGenreActive
+} = require('../controllers/preferences.controller');
 const {
   listMyStreamingServices,
   setStreamingServiceActive,
@@ -21,6 +31,9 @@ router.use(requireAuth);
 router.get('/users/me', getMe);
 router.patch('/users/me', updateMe);
 router.post('/users/me/avatar', uploadAvatar.single('avatar'), uploadMyAvatar);
+router.patch('/users/me/email', changeEmail);
+router.put('/users/me/password', changePassword);
+router.delete('/users/me', deleteAccount);
 
 // Géneros -> genres[]
 router.get('/users/me/genres', listMyGenres);
